@@ -53,13 +53,14 @@ ann_text <- function(x) {
     obj$token$lemma[obj[1]$token$POS == "NNP" |
                       obj[1]$token$POS == "NNPS"]
   
+  # i checked with having all verb types but base verb and past verb gives the best results    
   obj_VB <-
     obj$token$lemma[obj[1]$token$POS == "VB" |
-#                      obj[1]$token$POS == "VBP" |
+                      #                      obj[1]$token$POS == "VBP" |
                       obj[1]$token$POS == "VBD" ]
-#                      obj[1]$token$POS == "VBZ" |
-#                      obj[1]$token$POS == "VBN" |
-#                      obj[1]$token$POS == "VBG"]
+  #                      obj[1]$token$POS == "VBZ" |
+  #                      obj[1]$token$POS == "VBN" |
+  #                      obj[1]$token$POS == "VBG"]
   
   
   obj_WH <-
@@ -68,22 +69,14 @@ ann_text <- function(x) {
                       obj[1]$token$POS == "WP$" |
                       obj[1]$token$POS == "WRB" ]
   
-  avg_sentiment <- mean(obj[[8]]$sentimentValue)
-  
-  cnt_sentence <- obj$token$sentence[length(obj$token$sentence)]
-  cnt_token <- nrow(obj$token)
-  
-  
-  result <- list(obj_NN, obj_NNP, obj_VB, obj_WH,avg_sentiment,cnt_sentence,cnt_token)
+  result <- list(obj_NN, obj_NNP, obj_VB, obj_WH)
   
 }
 
-
 # loop on table and create similariy matrix
 for (j in 1:nrow(data)) {
-
   
-  # find similarity for ngram tokens
+  # get n gram tokens for both questions
   que1_gms <- prep_text(data$question1[j])
   que1_gms <- unique(que1_gms)
   
@@ -91,11 +84,14 @@ for (j in 1:nrow(data)) {
   que2_gms <- prep_text(data$question2[j])
   que2_gms <- unique(que2_gms)
   
+  # combine both vectors to get a combined vector   
   gms <- union(que1_gms, que2_gms)
   
   vect1 <- c()
   vect2 <- c()
   
+  # if both vectors are not null, prepare vect1 and vect2 vectors and find similarity. If one vector is 
+  # null and other is not define similarity as 0 and if both are null assume similarity as 0.5       
   if (length(que1_gms != 0) & length(que2_gms != 0)) {
     for (i in 1:length(gms)) {
       if (gms[i] %in% que1_gms) {
@@ -126,7 +122,7 @@ for (j in 1:nrow(data)) {
     
   }
   
-  # get annotations
+  # get annotations and create vectors and find cosine similarity as grams vector above
   
   que1_ann <- ann_text(data$question1[j])
   
@@ -134,18 +130,14 @@ for (j in 1:nrow(data)) {
   que1_np <- unique(que1_ann[[2]])
   que1_vb <- unique(que1_ann[[3]])
   que1_wh <- unique(que1_ann[[4]])
-
   
-  que2_ann <- ann_text(data$question2[200])
+  
+  que2_ann <- ann_text(data$question2[j])
   
   que2_nn <- unique(que2_ann[[1]])
   que2_np <- unique(que2_ann[[2]])
   que2_vb <- unique(que2_ann[[3]])
   que2_wh <- unique(que2_ann[[4]])
-
-  data$cnt_senti_diff[j] <- abs(que1_ann[[5]] - que2_ann[[5]])
-  data$cnt_senten_diff[j] <- abs(que1_ann[[6]] - que2_ann[[6]])
-  data$cnt_tokens_diff[j] <- abs(que1_ann[[7]] - que2_ann[[7]])
   
   # similarity for common nouns
   
@@ -290,43 +282,37 @@ for (j in 1:nrow(data)) {
                length(que2_wh != 0)) |
               (length(que1_wh != 0) & length(que2_wh == 0)))  {
     data$sim_wh[j] <- 0
+    
   } else {
     data$sim_wh[j] <- 0.5
     
-  }
-#  if (j %% 1000==0) {print(j)}
+  }  
+  
 }
 
 # Logistic regression
-model <- glm(is_duplicate~sim_gms+sim_np+sim_nn+sim_vb+sim_wh+cnt_senti_diff+cnt_senten_diff+cnt_tokens_diff,data=data,family = quasibinomial(link = 'logit'))
+model_log <- glm(is_duplicate~sim_gms+sim_np+sim_nn+sim_vb+sim_wh,data=data,family = quasibinomial(link = 'logit'))
 
-summary(model)
+summary(model_log)
 
-data$prob <- predict(model,type=c("response"))
+data$prob_log <- predict(model,type=c("response"))
 
-roc_p <- roc(data$is_duplicate,data$prob)
-roc_p
-# 
+roc_log <- roc(data$is_duplicate,data$prob_log)
+roc_log
+# we get area under the curve 0.73, this is a fair model 
 
 # random forest model
-data1$is_duplicate <- as.factor(data1$is_duplicate)
 
 
-model <- randomForest(is_duplicate~sim_gms+sim_np+sim_nn+sim_vb+sim_wh+cnt_senti_diff+cnt_senten_diff+cnt_tokens_diff,data=data)
+model_rf <- randomForest(is_duplicate~sim_gms+sim_np+sim_nn+sim_vb+sim_wh,data=data)
 
-summary(model)
+summary(model_rf)
 
-data$prob <- predict(model,type=c("response"))
+data$prob_rf <- predict(model_rf,type=c("response"))
 
-roc_p <- roc(data$is_duplicate,data$prob)
-roc_p
+roc_rf <- roc(data$is_duplicate,data$prob_rf)
+roc_rf
 
-model <- SMO(is_duplicate~sim_gms+sim_np+sim_nn+sim_vb+sim_wh+cnt_senti_diff+cnt_senten_diff+cnt_tokens_diff,data=data)
+# we get approx 0.77 area under the curve which is fair to good
 
-summary(model)
-
-data$prob <- predict(model,data)
-
-roc_p <- roc(data$is_duplicate,data$prob)
-roc_p
 
