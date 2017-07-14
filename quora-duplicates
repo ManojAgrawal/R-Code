@@ -1,0 +1,332 @@
+library(tokenizers)
+library(lsa)
+library(tm)
+library(dplyr)
+library(coreNLP)
+library(NLP)
+library(pROC)
+library(randomForest)
+
+rm(train)
+#devtools::install_github("statsmaths/coreNLP")
+#coreNLP::downloadCoreNLP()
+initCoreNLP()
+
+data <- train[5000:10000,]
+
+# funtion to clean and create ngrams token
+prep_text <- function(x) {
+  x <- Corpus(VectorSource(x))
+  
+  x <- x %>%
+    
+    tm_map(content_transformer(tolower)) %>%
+    tm_map(removePunctuation) %>%
+#    tm_map(removeNumbers) %>%
+    tm_map(removeWords, stopwords()) %>%
+    tm_map(stemDocument) %>%
+    tm_map(stripWhitespace)
+  
+  x <- x[[1]]$content
+  x <-
+    tokenize_ngrams(
+      x,
+      ngram_delim = " ",
+      n = 3,
+      n_min = 1,
+      simplify = TRUE
+    )
+  
+}
+
+
+# funtion to annotate string
+
+ann_text <- function(x) {
+  obj <- annotateString(x)
+  
+  obj_NN <-
+    obj$token$lemma[obj[1]$token$POS == "NN" |
+                      obj[1]$token$POS == "NNS"]
+  
+  obj_NNP <-
+    obj$token$lemma[obj[1]$token$POS == "NNP" |
+                      obj[1]$token$POS == "NNPS"]
+  
+  obj_VB <-
+    obj$token$lemma[obj[1]$token$POS == "VB" |
+#                      obj[1]$token$POS == "VBP" |
+                      obj[1]$token$POS == "VBD" ]
+#                      obj[1]$token$POS == "VBZ" |
+#                      obj[1]$token$POS == "VBN" |
+#                      obj[1]$token$POS == "VBG"]
+  
+  
+  obj_WH <-
+    obj$token$lemma[obj[1]$token$POS == "WDT" |
+                      obj[1]$token$POS == "WP" |
+                      obj[1]$token$POS == "WP$" |
+                      obj[1]$token$POS == "WRB" ]
+  
+  avg_sentiment <- mean(obj[[8]]$sentimentValue)
+  
+  cnt_sentence <- obj$token$sentence[length(obj$token$sentence)]
+  cnt_token <- nrow(obj$token)
+  
+  
+  result <- list(obj_NN, obj_NNP, obj_VB, obj_WH,avg_sentiment,cnt_sentence,cnt_token)
+  
+}
+
+
+# loop on table and create similariy matrix
+for (j in 1:nrow(data)) {
+
+  
+  # find similarity for ngram tokens
+  que1_gms <- prep_text(data$question1[j])
+  que1_gms <- unique(que1_gms)
+  
+  
+  que2_gms <- prep_text(data$question2[j])
+  que2_gms <- unique(que2_gms)
+  
+  gms <- union(que1_gms, que2_gms)
+  
+  vect1 <- c()
+  vect2 <- c()
+  
+  if (length(que1_gms != 0) & length(que2_gms != 0)) {
+    for (i in 1:length(gms)) {
+      if (gms[i] %in% que1_gms) {
+        vect1 <- append(vect1, 1)
+      }
+      
+      else {
+        vect1 <- append(vect1, 0)
+      }
+      if (gms[i] %in% que2_gms) {
+        vect2 <- append(vect2, 1)
+      }
+      
+      else {
+        vect2 <- append(vect2, 0)
+      }
+    }
+    
+    data$sim_gms[j] <- cosine(vect1, vect2)
+    
+  } else if ((length(que1_gms == 0) &
+              length(que2_gms != 0)) |
+             (length(que1_gms != 0) & length(que2_gms == 0)))  {
+    data$sim_gms[j] <- 0
+    
+  } else {
+    data$sim_gms[j] <- 0.5
+    
+  }
+  
+  # get annotations
+  
+  que1_ann <- ann_text(data$question1[j])
+  
+  que1_nn <- unique(que1_ann[[1]])
+  que1_np <- unique(que1_ann[[2]])
+  que1_vb <- unique(que1_ann[[3]])
+  que1_wh <- unique(que1_ann[[4]])
+
+  
+  que2_ann <- ann_text(data$question2[200])
+  
+  que2_nn <- unique(que2_ann[[1]])
+  que2_np <- unique(que2_ann[[2]])
+  que2_vb <- unique(que2_ann[[3]])
+  que2_wh <- unique(que2_ann[[4]])
+
+  data$cnt_senti_diff[j] <- abs(que1_ann[[5]] - que2_ann[[5]])
+  data$cnt_senten_diff[j] <- abs(que1_ann[[6]] - que2_ann[[6]])
+  data$cnt_tokens_diff[j] <- abs(que1_ann[[7]] - que2_ann[[7]])
+  
+  # similarity for common nouns
+  
+  nn <- union(que1_nn, que2_nn)
+  
+  vect1 <- c()
+  vect2 <- c()
+  
+  if (length(que1_nn != 0) & length(que2_nn != 0)) {
+    for (i in 1:length(nn)) {
+      if (nn[i] %in% que1_nn) {
+        vect1 <- append(vect1, 1)
+      }
+      
+      else {
+        vect1 <- append(vect1, 0)
+      }
+      if (nn[i] %in% que2_nn) {
+        vect2 <- append(vect2, 1)
+      }
+      
+      else {
+        vect2 <- append(vect2, 0)
+      }
+    }
+    
+    data$sim_nn[j] <- cosine(vect1, vect2)
+    
+  } else if ((length(que1_nn == 0) &
+              length(que2_nn != 0)) |
+             (length(que1_nn != 0) & length(que2_nn == 0)))  {
+    data$sim_nn[j] <- 0
+    
+  } else {
+    data$sim_nn[j] <- 0.5
+    
+  }
+  
+  
+  # similarity for proper nouns
+  
+  np <- union(que1_np, que2_np)
+  
+  vect1 <- c()
+  vect2 <- c()
+  
+  if (length(que1_np != 0) & length(que2_np != 0)) {
+    for (i in 1:length(np)) {
+      if (np[i] %in% que1_np) {
+        vect1 <- append(vect1, 1)
+      }
+      
+      else {
+        vect1 <- append(vect1, 0)
+      }
+      if (np[i] %in% que2_np) {
+        vect2 <- append(vect2, 1)
+      }
+      
+      else {
+        vect2 <- append(vect2, 0)
+      }
+    }
+    
+    data$sim_np[j] <- cosine(vect1, vect2)
+    
+  }  else if ((length(que1_np == 0) &
+               length(que2_np != 0)) |
+              (length(que1_np != 0) & length(que2_np == 0)))  {
+    data$sim_np[j] <- 0
+    
+  } else {
+    data$sim_np[j] <- 0.5
+    
+  }
+  
+  # similarity for verbs
+  
+  vb <- union(que1_vb, que2_vb)
+  
+  vect1 <- c()
+  vect2 <- c()
+  
+  if (length(que1_vb != 0) & length(que2_vb != 0)) {
+    for (i in 1:length(vb)) {
+      if (vb[i] %in% que1_vb) {
+        vect1 <- append(vect1, 1)
+      }
+      
+      else {
+        vect1 <- append(vect1, 0)
+      }
+      if (vb[i] %in% que2_vb) {
+        vect2 <- append(vect2, 1)
+      }
+      
+      else {
+        vect2 <- append(vect2, 0)
+      }
+    }
+    
+    data$sim_vb[j] <- cosine(vect1, vect2)
+    
+  }  else if ((length(que1_vb == 0) &
+               length(que2_vb != 0)) |
+              (length(que1_vb != 0) & length(que2_vb == 0)))  {
+    data$sim_vb[j] <- 0
+    
+  } else {
+    data$sim_vb[j] <- 0.5
+    
+  }
+  
+  # similarity for question terms
+  
+  wh <- union(que1_wh, que2_wh)
+  
+  vect1 <- c()
+  vect2 <- c()
+  
+  if (length(que1_wh != 0) & length(que2_wh != 0)) {
+    for (i in 1:length(wh)) {
+      if (wh[i] %in% que1_wh) {
+        vect1 <- append(vect1, 1)
+      }
+      
+      else {
+        vect1 <- append(vect1, 0)
+      }
+      if (wh[i] %in% que2_wh) {
+        vect2 <- append(vect2, 1)
+      }
+      
+      else {
+        vect2 <- append(vect2, 0)
+      }
+    }
+    
+    data$sim_wh[j] <- cosine(vect1, vect2)
+    
+  }  else if ((length(que1_wh == 0) &
+               length(que2_wh != 0)) |
+              (length(que1_wh != 0) & length(que2_wh == 0)))  {
+    data$sim_wh[j] <- 0
+  } else {
+    data$sim_wh[j] <- 0.5
+    
+  }
+#  if (j %% 1000==0) {print(j)}
+}
+
+# Logistic regression
+model <- glm(is_duplicate~sim_gms+sim_np+sim_nn+sim_vb+sim_wh+cnt_senti_diff+cnt_senten_diff+cnt_tokens_diff,data=data,family = quasibinomial(link = 'logit'))
+
+summary(model)
+
+data$prob <- predict(model,type=c("response"))
+
+roc_p <- roc(data$is_duplicate,data$prob)
+roc_p
+# 
+
+# random forest model
+data1$is_duplicate <- as.factor(data1$is_duplicate)
+
+
+model <- randomForest(is_duplicate~sim_gms+sim_np+sim_nn+sim_vb+sim_wh+cnt_senti_diff+cnt_senten_diff+cnt_tokens_diff,data=data)
+
+summary(model)
+
+data$prob <- predict(model,type=c("response"))
+
+roc_p <- roc(data$is_duplicate,data$prob)
+roc_p
+
+model <- SMO(is_duplicate~sim_gms+sim_np+sim_nn+sim_vb+sim_wh+cnt_senti_diff+cnt_senten_diff+cnt_tokens_diff,data=data)
+
+summary(model)
+
+data$prob <- predict(model,data)
+
+roc_p <- roc(data$is_duplicate,data$prob)
+roc_p
+
