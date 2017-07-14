@@ -1,0 +1,249 @@
+library(caret)
+library(xgboost)
+
+
+# training data
+
+
+train <- train_org[,-1]
+
+
+
+#train$MSSubClass <- as.factor(train$MSSubClass)
+train$MoSold <- as.factor(train$MoSold)
+#train$OverallQual <- as.factor(train$OverallQual)
+#train$OverallCond <- as.factor(train$OverallCond)
+train$MasVnrArea[is.na(train$MasVnrArea)] <- 0
+train$LotFrontage[is.na(train$LotFrontage)] <- median(train$LotFrontage, na.rm=TRUE)
+train$GarageYrBlt <- NULL
+
+
+train[is.na(train)] <- "NA"
+
+
+train_dmy <- dummyVars(" ~ .", data = train)
+
+train_encod <- data.frame(predict(train_dmy,newdata=train))
+
+options(max.print = 9999)
+
+
+cor(train[c("LotFrontage","LotArea","OverallQual","OverallCond","SalePrice")])
+
+train_encod$OverallQual2 <- (train_encod$OverallQual)^2
+
+pairs(train[c("YearBuilt","YearRemodAdd","MasVnrArea","BsmtFinSF1","SalePrice")])
+
+train_encod$YearBuilt2 <- (train_encod$YearBuilt)^2
+train_encod$YearRemodAdd2 <- (train_encod$YearRemodAdd)^2
+train_encod$BsmtFinSF12 <- (train_encod$BsmtFinSF1)^2
+
+pairs(train[c("BsmtFinSF2","BsmtUnfSF","TotalBsmtSF","1stFlrSF","SalePrice")])
+train_encod$BsmtFinSF22 <- (train_encod$BsmtFinSF2)^2
+train_encod$BsmtUnfSF2 <- (train_encod$BsmtUnfSF)^2
+
+pairs(train[c("2ndFlrSF","GrLivArea","BsmtFullBath","BsmtHalfBath","SalePrice")])
+train_encod$X.2ndFlrSF2 <- (train_encod$X.2ndFlrSF)^2
+
+str(train_encod[,300:323])
+
+pairs(train[c("PoolArea","MiscVal","YrSold","GarageArea","SalePrice")])
+train_encod$GarageCars2 <- (train_encod$GarageCars)^2
+
+
+# model 1
+
+
+model <- lm(SalePrice~.,data = train_encod)
+
+summary(model)
+
+
+train_final <- train_encod[c("MSZoningC..all.","LotArea","StreetGrvl","LandContourLow",
+                  "LotConfigCulDSac","LotConfigFR2","LandSlopeGtl","LandSlopeMod","NeighborhoodEdwards", "Neighborhoodmes",
+                  "NeighborhoodMitchel","NeighborhoodNoRidge","NeighborhoodNridgHt","NeighborhoodNWAmes","NeighborhoodStoneBr","Condition1RRAe",
+                  "Condition2PosN","Condition2RRAe","OverallQual","OverallCond","YearBuilt",
+                  "YearRemodAdd","RoofStyleFlat","RoofStyleGable","RoofStyleGambrel","RoofStyleHip","RoofStyleMansard",
+                  "RoofMatlClyTile","RoofMatlCompShg","RoofMatlRoll","RoofMatlTar.Grv","RoofMatlWdShake","Exterior1stBrkFace","MasVnrTypeBrkFace","MasVnrArea",
+                  "FoundationCBlock","BsmtQualEx","BsmtCondPo","BsmtExposureAv","BsmtExposureGd","BsmtFinSF1","BsmtFinSF2","BsmtUnfSF","X.1stFlrSF.",
+                  "X.2ndFlrSF.","FullBath","BedroomAbvGr","KitchebvGr","KitchenQualEx","TotRmsAbvGrd","FunctiolMaj1","FunctiolMaj2",
+                  "FunctiolMin1","FunctiolMin2","FunctiolMod","FunctiolSev","Fireplaces",
+                  "GarageArea","GarageQualEx","GarageCondEx","ScreenPorch","PoolArea","PoolQCEx","PoolQCFa","PoolQCGd",
+                  "FenceGdPrv","SalePrice")]
+
+
+
+
+
+model2 <- lm(SalePrice~.,data=train_final)
+
+summary(model2)
+
+# define outcome and predictor parameters
+outcome <- c('SalePrice')
+
+predictors <- names(train_encod)[!names(train_encod) %in% outcome]
+
+train_matrix <- as.matrix(train_encod,rownames.force = NA)
+
+set.seed = 10
+
+# cross-validate
+
+m <- train(SalePrice ~ .,data=train_final,method="xgbLinear")
+
+ctrl <- trainControl(method = "cv",number = 10)
+grid <- expand.grid(nrounds=2400,lambda=c(0,0.0001), alpha =c(1,0.1,0.01),eta=c(0.0001,0.001))
+grid <- expand.grid(nrounds=c(400,800),lambda=0, alpha =c(0.0001,0.001),eta=c(seq(0.0001,0.001,0.0001)))
+
+m2 <- train(SalePrice ~ .,data=train_encod,method="xgbLinear",trControl = ctrl, tuneGrid = grid)
+
+m2
+train_cv <- xgb.cv(data = train_matrix[,predictors],
+                    label = train_matrix[,outcome],
+                    nrounds = 2400,
+#                    max_depth = 8,
+                    eta = 0.0001,
+                    alpha = 1,
+                    lambda = 0.001,
+#                    subsample = .7,
+                    booster = "gbtree",
+                    eval_metric = "rmse",
+                    verbose = TRUE,
+                    print_every_n = 50,
+                    nfold = 4,
+#                    nthread = 2,
+                    objective="reg:linear")
+
+
+train_sparse <- as(train_matrix,"sparseMatrix")
+
+train_dmatrix <- xgb.DMatrix(data = train_matrix[,predictors],label = train_matrix[,outcome] )
+
+param<-list(
+  objective = "reg:linear",
+  eval_metric = "rmse",
+  booster = "gbtree",
+  max_depth = 8,
+  eta = 0.02,
+  subsample = 0.7
+)
+
+model3 <- xgb.train( params = param,
+                    data = train_dmatrix,
+                    nrounds = 800,
+                    verbose = TRUE,
+                    watchlist = list(train = train_dmatrix),
+                    print_every_n = 50,
+                    nfold = 4,
+                    nthread = 2)
+
+
+## for rmse, is this correct?
+predictions <- predict(model3,as.matrix(train_final[,predictors]))
+
+rmse <- sqrt((mean(train_final$SalePrice-predictions))^2)
+rmse
+
+# Prepare test data
+
+test <- test_org
+test <- test[,c(-1,-81)]
+
+test$Condition2RRAe <- 0
+test$Condition2RRAn <- 0
+test$Condition2RRNn <- 0
+test$RoofMatlClyTile <- 0
+test$RoofMatlRoll <- 0
+test$RoofMatlTar.Grv <- 0
+test$RoofMatlMembran <- 0
+test$RoofMatlMetal <- 0
+test$PoolQCFa <- 0
+test$MiscFeatureTenC <- 0
+test$GarageQualEx <- 0
+
+# test$MSSubClass <- as.factor(test$MSSubClass)
+# test$OverallQual <- as.factor(test$OverallQual)
+# test$OverallCond <- as.factor(test$OverallCond)
+test$MoSold <- as.factor(test$MoSold)
+test$MasVnrArea[is.na(test$MasVnrArea)] <- 0
+test$BsmtFinSF1[is.na(test$BsmtFinSF1)] <- 0
+test$BsmtFinSF2[is.na(test$BsmtFinSF2)] <- 0
+test$BsmtUnfSF[is.na(test$BsmtUnfSF)] <- 0
+test$TotalBsmtSF[is.na(test$TotalBsmtSF)] <- 0
+test$BsmtFullBath[is.na(test$BsmtFullBath)] <- 0
+test$BsmtHalfBath[is.na(test$BsmtHalfBath)] <- 0
+test$GarageCars[is.na(test$GarageCars)] <- 0
+test$GarageArea[is.na(test$GarageArea)] <- 0
+#test$GarageYrBlt[is.na(test$GarageYrBlt)] <- 0
+
+test$LotFrontage[is.na(test$LotFrontage)] <- median(test$LotFrontage, na.rm=TRUE)
+
+str(test)
+
+test[is.na(test)] <- "N/A"
+
+test_dmy <- dummyVars(" ~ .", data = test)
+
+test_encod <- data.frame(predict(test_dmy,newdata=test))
+
+test_encod$AlleyNA <- test_encod$AlleyN.A
+test_encod$UtilitiesNoSeWa <- 0
+test_encod$HouseStyle2.5Fin <- 0
+test_encod$Exterior1stImStucc <- 0
+test_encod$Exterior1stStone <- 0
+test_encod$Exterior2ndOther <- 0
+test_encod$MasVnrTypeNA <- test_encod$MasVnrTypeN.A
+test_encod$BsmtQualNA <- test_encod$BsmtQualN.A
+test_encod$BsmtCondNA <- test_encod$BsmtCondN.A  
+test_encod$BsmtExposureNA <- test_encod$BsmtExposureN.A 
+test_encod$BsmtFinType1NA <- test_encod$BsmtFinType1N.A
+test_encod$BsmtFinType2NA <- test_encod$BsmtFinType2N.A
+test_encod$HeatingFloor <- 0
+test_encod$HeatingOthW <- 0
+test_encod$ElectricalMix <- 0
+test_encod$ElectricalNA <- 0
+test_encod$FireplaceQuNA <- test_encod$FireplaceQuN.A
+test_encod$GarageTypeNA <- test_encod$GarageTypeN.A
+test_encod$GarageFinishNA <- test_encod$GarageFinishN.A
+test_encod$GarageQualNA <- test_encod$GarageQualN.A
+test_encod$GarageCondNA <- test_encod$GarageCondN.A
+test_encod$PoolQCNA <- test_encod$PoolQCN.A
+test_encod$FenceNA <- test_encod$FenceN.A
+test_encod$MiscFeatureNA <- test_encod$MiscFeatureN.A
+test_encod$OverallQual2 <- (test_encod$OverallQual)^2
+test_encod$YearBuilt2 <- (test_encod$YearBuilt)^2
+test_encod$YearRemodAdd2 <- (test_encod$YearRemodAdd)^2
+test_encod$BsmtFinSF12 <- (test_encod$BsmtFinSF1)^2
+test_encod$BsmtFinSF22 <- (test_encod$BsmtFinSF2)^2
+test_encod$BsmtUnfSF2 <- (test_encod$BsmtUnfSF)^2
+test_encod$X.2ndFlrSF2 <- (test_encod$X.2ndFlrSF)^2
+test_encod$GarageCars2 <- (test_encod$GarageCars)^2
+
+
+predict_test <- predict(m2,test_encod)
+
+
+test_final <- test_encod[c("MSZoningC..all.","LotArea","StreetGrvl","LandContourLow",
+                           "LotConfigCulDSac","LotConfigFR2","LandSlopeGtl","LandSlopeMod","NeighborhoodEdwards", "Neighborhoodmes",
+                           "NeighborhoodMitchel","NeighborhoodNoRidge","NeighborhoodNridgHt","NeighborhoodNWAmes","NeighborhoodStoneBr","Condition1RRAe",
+                           "Condition2PosN","Condition2RRAe","OverallQual","OverallCond","YearBuilt",
+                           "YearRemodAdd","RoofStyleFlat","RoofStyleGable","RoofStyleGambrel","RoofStyleHip","RoofStyleMansard",
+                           "RoofMatlClyTile","RoofMatlCompShg","RoofMatlRoll","RoofMatlTar.Grv","RoofMatlWdShake","Exterior1stBrkFace","MasVnrTypeBrkFace","MasVnrArea",
+                           "FoundationCBlock","BsmtQualEx","BsmtCondPo","BsmtExposureAv","BsmtExposureGd","BsmtFinSF1","BsmtFinSF2","BsmtUnfSF","X.1stFlrSF.",
+                           "X.2ndFlrSF.","FullBath","BedroomAbvGr","KitchebvGr","KitchenQualEx","TotRmsAbvGrd","FunctiolMaj1","FunctiolMaj2",
+                           "FunctiolMin1","FunctiolMin2","FunctiolMod","FunctiolSev","Fireplaces",
+                           "GarageArea","GarageQualEx","GarageCondEx","ScreenPorch","PoolArea","PoolQCEx","PoolQCFa","PoolQCGd",
+                           "FenceGdPrv")]
+
+test_matrix<- as.matrix(test_final, rownames.force=NA)
+test_sparse <- as(test_matrix,"sparseMatrix")
+
+predict_test <- predict(model3,test_sparse)
+
+output <- cbind(test_org[,1],SalePrice=predict_test)
+
+########
+predict_test <- predict(m2,test_encod)
+
+write.csv(output,file="C:/Kaggle/house prices/results8.csv")
